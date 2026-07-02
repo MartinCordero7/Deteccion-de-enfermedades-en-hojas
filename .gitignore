@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+
+# YOLO y datasets
+images/
+labels/
+dataset/
+runs/
+*.pt
+*.zip
+
+# Entorno local
+.env
+.DS_Store
