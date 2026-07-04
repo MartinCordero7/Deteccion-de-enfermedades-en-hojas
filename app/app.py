@@ -178,105 +178,169 @@ def get_history_table() -> list[list]:
 # CSS personalizado
 # ─────────────────────────────────────────────────────────────
 CUSTOM_CSS = """
-/* ── Variables de color ─────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+
+/* ── Variables de color Premium ─────────────────────── */
 :root {
-    --green-primary:  #22c55e;
-    --green-dark:     #16a34a;
-    --bg-dark:        #0f1117;
-    --bg-card:        #1a1f2e;
-    --bg-card2:       #242938;
-    --text-primary:   #f1f5f9;
-    --text-muted:     #94a3b8;
-    --accent-glow:    rgba(34,197,94,0.25);
-    --border:         rgba(255,255,255,0.08);
-    --radius:         12px;
+    --green-primary: #10b981;
+    --green-dark: #059669;
+    --green-glow: rgba(16, 185, 129, 0.4);
+    --bg-dark: #09090b;
+    --bg-card: rgba(255, 255, 255, 0.03);
+    --text-primary: #f8fafc;
+    --text-muted: #94a3b8;
+    --border: rgba(255, 255, 255, 0.08);
+    --radius: 16px;
 }
 
 /* ── Layout base ────────────────────────────────────── */
 body, .gradio-container {
-    background: var(--bg-dark) !important;
-    font-family: 'Inter', 'Segoe UI', sans-serif !important;
+    background: radial-gradient(circle at 50% -20%, #0d281a, var(--bg-dark) 60%) !important;
+    background-attachment: fixed !important;
+    font-family: 'Outfit', sans-serif !important;
     color: var(--text-primary) !important;
 }
 
-/* ── Header ─────────────────────────────────────────── */
+/* ── Header Premium ─────────────────────────────────── */
 #header-html {
-    background: linear-gradient(135deg, #0d1f14 0%, #1a3a2a 50%, #0d1f14 100%);
-    border: 1px solid rgba(34,197,94,0.3);
-    border-radius: var(--radius);
-    padding: 28px 36px;
-    margin-bottom: 24px;
-    box-shadow: 0 0 40px var(--accent-glow);
+    background: rgba(10, 15, 20, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    border-top: 1px solid rgba(16, 185, 129, 0.4);
+    border-radius: 20px;
+    padding: 36px 40px;
+    margin-bottom: 30px;
+    box-shadow: 0 15px 35px rgba(0,0,0,0.4), inset 0 0 40px rgba(16, 185, 129, 0.05);
+    position: relative;
+    overflow: hidden;
+}
+#header-html::before {
+    content: '';
+    position: absolute;
+    top: 0; left: -100%;
+    width: 50%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+    transform: skewX(-20deg);
+    animation: shine 6s infinite;
+}
+@keyframes shine {
+    0% { left: -100%; }
+    20% { left: 200%; }
+    100% { left: 200%; }
 }
 #header-html h1 {
-    font-size: 2rem;
+    font-family: 'Outfit', sans-serif;
+    font-size: 2.4rem;
     font-weight: 800;
-    background: linear-gradient(135deg, #22c55e, #86efac);
+    background: linear-gradient(135deg, #34d399, #10b981, #059669);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    margin: 0 0 8px 0;
+    margin: 0 0 10px 0;
+    letter-spacing: -0.5px;
 }
 #header-html p {
     color: var(--text-muted);
-    font-size: 0.95rem;
+    font-size: 1.05rem;
+    font-weight: 300;
     margin: 0;
 }
 
-/* ── Tarjetas de panel ───────────────────────────────── */
+/* ── Tarjetas Glassmorphism ─────────────────────────── */
 .panel-card {
     background: var(--bg-card) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
     border: 1px solid var(--border) !important;
     border-radius: var(--radius) !important;
-    padding: 20px !important;
-    transition: box-shadow 0.25s ease;
+    padding: 24px !important;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2) !important;
 }
 .panel-card:hover {
-    box-shadow: 0 0 20px var(--accent-glow) !important;
+    transform: translateY(-3px);
+    border-color: rgba(16, 185, 129, 0.3) !important;
+    box-shadow: 0 8px 30px rgba(16, 185, 129, 0.15) !important;
 }
 
 /* ── Botón principal ─────────────────────────────────── */
 #btn-detect {
-    background: linear-gradient(135deg, var(--green-primary), var(--green-dark)) !important;
+    background: linear-gradient(135deg, #10b981, #059669) !important;
     color: #fff !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-size: 1rem !important;
-    font-weight: 700 !important;
-    padding: 12px 28px !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    border-radius: 12px !important;
+    font-family: 'Outfit', sans-serif !important;
+    font-size: 1.1rem !important;
+    font-weight: 600 !important;
+    padding: 14px 32px !important;
     cursor: pointer !important;
-    transition: opacity 0.2s, transform 0.15s;
-    box-shadow: 0 4px 20px rgba(34,197,94,0.35) !important;
+    transition: all 0.3s ease !important;
+    box-shadow: 0 8px 25px var(--green-glow), inset 0 2px 4px rgba(255,255,255,0.2) !important;
+    letter-spacing: 0.5px;
 }
-#btn-detect:hover { opacity: 0.88; transform: translateY(-1px); }
+#btn-detect:hover { 
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: 0 12px 35px rgba(16,185,129,0.5), inset 0 2px 4px rgba(255,255,255,0.3) !important;
+}
+#btn-detect:active {
+    transform: translateY(1px);
+}
 
-/* ── Sliders ─────────────────────────────────────────── */
+/* ── Sliders Premium ─────────────────────────────────── */
 input[type=range]::-webkit-slider-thumb {
-    background: var(--green-primary) !important;
+    background: #fff !important;
+    border: 2px solid var(--green-primary) !important;
+    box-shadow: 0 0 10px var(--green-glow) !important;
+}
+input[type=range]::-webkit-slider-runnable-track {
+    background: rgba(255,255,255,0.1) !important;
 }
 
-/* ── Tabs ────────────────────────────────────────────── */
+/* ── Tabs Modernos ───────────────────────────────────── */
+.tab-nav {
+    border-bottom: 1px solid rgba(255,255,255,0.05) !important;
+    margin-bottom: 20px !important;
+}
 .tab-nav button {
     color: var(--text-muted) !important;
-    border-bottom: 2px solid transparent !important;
-    font-weight: 500;
+    border: none !important;
+    font-family: 'Outfit', sans-serif !important;
+    font-size: 1.05rem !important;
+    font-weight: 500 !important;
+    padding: 12px 20px !important;
+    border-radius: 8px 8px 0 0 !important;
+    transition: all 0.2s ease !important;
+}
+.tab-nav button:hover {
+    color: #fff !important;
+    background: rgba(255,255,255,0.03) !important;
 }
 .tab-nav button.selected {
     color: var(--green-primary) !important;
-    border-bottom-color: var(--green-primary) !important;
+    background: rgba(16,185,129,0.05) !important;
+    border-bottom: 3px solid var(--green-primary) !important;
 }
 
 /* ── Badges de clase ─────────────────────────────────── */
 .badge {
     display: inline-block;
-    padding: 2px 10px;
+    padding: 4px 12px;
     border-radius: 99px;
-    font-size: 0.78rem;
+    font-size: 0.8rem;
     font-weight: 600;
     margin: 2px;
+    backdrop-filter: blur(4px);
 }
-.badge-grave   { background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid #f87171; }
-.badge-moderad { background: rgba(234,179,8,0.2);  color: #fbbf24; border: 1px solid #fbbf24; }
-.badge-sano    { background: rgba(34,197,94,0.2);  color: #4ade80; border: 1px solid #4ade80; }
+.badge-grave   { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(248,113,113,0.3); box-shadow: 0 0 10px rgba(239,68,68,0.2); }
+.badge-moderad { background: rgba(234,179,8,0.15);  color: #fde047; border: 1px solid rgba(251,191,36,0.3); box-shadow: 0 0 10px rgba(234,179,8,0.2); }
+.badge-sano    { background: rgba(34,197,94,0.15);  color: #86efac; border: 1px solid rgba(74,222,128,0.3); box-shadow: 0 0 10px rgba(34,197,94,0.2); }
+
+/* ── Ajustes de Gradio Internos ──────────────────────── */
+.gradio-container .prose h3, .gradio-container .prose h4 {
+    color: #fff !important;
+    font-family: 'Outfit', sans-serif !important;
+    font-weight: 600 !important;
+}
 """
 
 # ─────────────────────────────────────────────────────────────
@@ -314,9 +378,8 @@ def build_ui(model_path: str) -> gr.Blocks:
             # TAB 1: DETECCIÓN
             # ════════════════════════════════════════════════════
             with gr.Tab("🔍 Detección", id="tab-detect"):
+                # ── Fila 1: Imágenes (Entrada y Salida) ─────────
                 with gr.Row(equal_height=False):
-
-                    # ── Panel izquierdo: Entrada ─────────────────
                     with gr.Column(scale=5):
                         gr.Markdown("#### 📷 Imagen de la hoja")
                         input_image = gr.Image(
@@ -326,29 +389,6 @@ def build_ui(model_path: str) -> gr.Blocks:
                             height=360,
                             elem_classes=["panel-card"],
                         )
-                        with gr.Row():
-                            conf_slider = gr.Slider(
-                                minimum=0.10, maximum=0.95, value=0.40, step=0.05,
-                                label="🎯 Confianza mínima",
-                                info="Mayor valor → menos detecciones pero más precisas",
-                            )
-                            iou_slider = gr.Slider(
-                                minimum=0.10, maximum=0.95, value=0.45, step=0.05,
-                                label="📐 Umbral IoU (NMS)",
-                                info="Controla superposición de bounding boxes",
-                            )
-                        btn_detect = gr.Button(
-                            "🔬 Analizar Hoja",
-                            variant="primary",
-                            elem_id="btn-detect",
-                        )
-                        gr.Examples(
-                            examples=[],
-                            inputs=input_image,
-                            label="Ejemplos rápidos",
-                        )
-
-                    # ── Panel derecho: Resultado ──────────────────
                     with gr.Column(scale=5):
                         gr.Markdown("#### 🖼️ Resultado de Detección")
                         output_image = gr.Image(
@@ -359,7 +399,33 @@ def build_ui(model_path: str) -> gr.Blocks:
                             elem_classes=["panel-card"],
                         )
 
-                # ── Resultados: resumen + recomendaciones ────────
+                # ── Fila 2: Controles ────────────────────────────
+                with gr.Row():
+                    with gr.Column(scale=10):
+                        with gr.Group(elem_classes=["panel-card"]):
+                            with gr.Row():
+                                conf_slider = gr.Slider(
+                                    minimum=0.10, maximum=0.95, value=0.40, step=0.05,
+                                    label="🎯 Confianza mínima",
+                                    info="Mayor valor → menos detecciones pero más precisas",
+                                )
+                                iou_slider = gr.Slider(
+                                    minimum=0.10, maximum=0.95, value=0.45, step=0.05,
+                                    label="📐 Umbral IoU (NMS)",
+                                    info="Controla superposición de bounding boxes",
+                                )
+                            btn_detect = gr.Button(
+                                "🔬 Analizar Hoja",
+                                variant="primary",
+                                elem_id="btn-detect",
+                            )
+                            gr.Examples(
+                                examples=[],
+                                inputs=input_image,
+                                label="Ejemplos rápidos",
+                            )
+
+                # ── Fila 3: Resultados (Resumen + Recomendaciones) ────────
                 with gr.Row():
                     with gr.Column(scale=5):
                         summary_md = gr.Markdown(
