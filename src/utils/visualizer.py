@@ -38,19 +38,22 @@ def draw_detections(image: np.ndarray, results, conf_threshold: float = 0.25) ->
 
             # Coordenadas del bounding box
             x1, y1, x2, y2 = map(int, box.xyxy[0])
+            
+            # Ajuste dinámico de grosor y tamaño de fuente según el tamaño de la imagen
+            h, w = image.shape[:2]
+            thickness = max(2, int(w * 0.005))
+            font_scale = max(0.6, w * 0.0012)
+            pad = max(4, int(w * 0.01))
 
-            # Dibujar rectángulo con borde grueso
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+            # Dibujar rectángulo con borde dinámico
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
 
             # Preparar texto
             text = f"{label_es}  {conf:.0%}"
             font       = cv2.FONT_HERSHEY_DUPLEX
-            font_scale = 0.6
-            thickness  = 1
             (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
 
             # Fondo sólido para el texto
-            pad = 6
             cv2.rectangle(
                 annotated,
                 (x1, y1 - th - 2 * pad),

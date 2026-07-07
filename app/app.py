@@ -133,6 +133,27 @@ def predict_from_pil(
     return annotated_pil, summary_md, recom_md, json.dumps(detections_raw, indent=2, ensure_ascii=False)
 
 
+def predict_live(
+    frame: np.ndarray,
+    conf_threshold: float,
+    iou_threshold: float,
+) -> np.ndarray:
+    """Inferencia rápida para tiempo real (webcam)."""
+    if frame is None:
+        return None
+    model = get_model()
+    # Gradio proporciona frame en RGB (numpy array) cuando streaming=True
+    img_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    results = model.predict(
+        img_bgr,
+        conf=conf_threshold,
+        iou=iou_threshold,
+        verbose=False,
+    )
+    annotated_bgr = draw_detections(img_bgr, results, conf_threshold)
+    return cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+
+
 def export_history_csv() -> str:
     """Exporta el historial de detecciones como CSV."""
     if not HISTORY:
@@ -375,9 +396,45 @@ def build_ui(model_path: str) -> gr.Blocks:
         with gr.Tabs():
 
             # ════════════════════════════════════════════════════
-            # TAB 1: DETECCIÓN
             # ════════════════════════════════════════════════════
-            with gr.Tab("🔍 Detección", id="tab-detect"):
+            # TAB 1: EN VIVO
+            # ════════════════════════════════════════════════════
+            with gr.Tab("🎥 Detección en Vivo", id="tab-live"):
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=5):
+                        gr.Markdown("#### 📷 Cámara")
+                        live_image = gr.Image(
+                            type="numpy",
+                            label="Transmisión",
+                            sources=["webcam"],
+                            streaming=True,
+                            elem_classes=["panel-card"],
+                        )
+                        with gr.Group(elem_classes=["panel-card"]):
+                            with gr.Row():
+                                live_conf = gr.Slider(minimum=0.1, maximum=0.95, value=0.20, step=0.05, label="🎯 Confianza mínima")
+                                live_iou = gr.Slider(minimum=0.1, maximum=0.95, value=0.45, step=0.05, label="📐 Umbral IoU")
+                    
+                    with gr.Column(scale=5):
+                        gr.Markdown("#### 🖼️ Detección en Tiempo Real")
+                        live_output = gr.Image(
+                            type="numpy",
+                            label="Salida",
+                            interactive=False,
+                            elem_classes=["panel-card"],
+                        )
+                
+                # Evento de streaming
+                live_image.stream(
+                    fn=predict_live,
+                    inputs=[live_image, live_conf, live_iou],
+                    outputs=[live_output],
+                )
+
+            # ════════════════════════════════════════════════════
+            # TAB 2: DETECCIÓN POR FOTO
+            # ════════════════════════════════════════════════════
+            with gr.Tab("🔍 Detección por Foto", id="tab-detect"):
                 # ── Fila 1: Imágenes (Entrada y Salida) ─────────
                 with gr.Row(equal_height=False):
                     with gr.Column(scale=5):
@@ -385,7 +442,7 @@ def build_ui(model_path: str) -> gr.Blocks:
                         input_image = gr.Image(
                             type="pil",
                             label="Cargar imagen",
-                            sources=["upload", "clipboard"],
+                            sources=["upload", "clipboard", "webcam"],
                             height=360,
                             elem_classes=["panel-card"],
                         )
