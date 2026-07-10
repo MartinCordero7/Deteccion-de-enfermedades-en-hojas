@@ -29,3 +29,7 @@ reportlab>=4.0.0
 
 # --- Opcionales (descarga de datasets) ---
 # roboflow>=1.1.0
+
+# --- Base de Datos ---
+pymongo>=4.0.0
+python-dotenv>=1.0.0

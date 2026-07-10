@@ -25,12 +25,12 @@ import gradio as gr
 from ultralytics import YOLO
 from src.utils import CLASS_NAMES_ES, SEVERITY_LEVEL, RECOMMENDATIONS
 from src.utils.visualizer import draw_detections, build_summary_text
+import src.db.mongo as mongo_db
 
 # ─────────────────────────────────────────────────────────────
 # Configuración
 # ─────────────────────────────────────────────────────────────
 DEFAULT_MODEL = ROOT / "models" / "best.pt"
-HISTORY: list[dict] = []          # Historial de detecciones en sesión
 _model: YOLO | None = None        # Modelo cargado en memoria
 
 
@@ -123,14 +123,109 @@ def predict_from_pil(
     recom_md = "\n".join(recom_lines)
 
     # Guardar en historial
-    HISTORY.append({
-        "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "detecciones": len(detections_raw),
-        "clases":      list(seen_classes),
-        "resultados":  detections_raw,
-    })
+    mongo_db.save_detection(
+        img_original_rgb=np.array(pil_image),
+        img_annotated_rgb=annotated_rgb,
+        detections_data=detections_raw
+    )
 
     return annotated_pil, summary_md, recom_md, json.dumps(detections_raw, indent=2, ensure_ascii=False)
+
+
+def predict_multi_images(
+    files,
+    conf_threshold: float,
+    iou_threshold: float,
+) -> tuple[list[Image.Image], str, str, str]:
+    """
+    Realiza la inferencia sobre múltiples imágenes (hasta 4).
+    """
+    if not files:
+        return [], "⬆️ Sube al menos una imagen para analizar.", "", "{}"
+
+    model = get_model()
+    
+    # Procesar máximo 4 archivos
+    files = files[:4]
+    
+    all_annotated_pil = []
+    combined_summary = []
+    combined_recom = []
+    all_detections_raw = []
+    
+    for i, file_obj in enumerate(files):
+        img_path = file_obj.name if hasattr(file_obj, 'name') else str(file_obj)
+        
+        try:
+            pil_image = Image.open(img_path).convert("RGB")
+        except Exception as e:
+            combined_summary.append(f"### Imagen {i+1}\nError al cargar la imagen.")
+            continue
+            
+        img_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+        
+        results = model.predict(
+            img_bgr,
+            conf=conf_threshold,
+            iou=iou_threshold,
+            verbose=False,
+        )
+        
+        annotated_bgr = draw_detections(img_bgr, results, conf_threshold)
+        annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+        all_annotated_pil.append(Image.fromarray(annotated_rgb))
+        
+        # Resumen
+        summary_md = build_summary_text(results, conf_threshold)
+        combined_summary.append(f"### Imagen {i+1}\n" + summary_md)
+        
+        # Recomendaciones
+        detections_raw = []
+        recom_lines = [f"### 💡 Recomendaciones - Imagen {i+1}\n"]
+        seen_classes = set()
+        
+        for result in results:
+            if result.boxes is None:
+                continue
+            for box in result.boxes:
+                if float(box.conf[0]) < conf_threshold:
+                    continue
+                cls_name = result.names[int(box.cls[0])]
+                conf_val = float(box.conf[0])
+                label_es = CLASS_NAMES_ES.get(cls_name, cls_name)
+                severity = SEVERITY_LEVEL.get(cls_name, "")
+                recom    = RECOMMENDATIONS.get(cls_name, "")
+                bbox     = box.xyxy[0].tolist()
+
+                detections_raw.append({
+                    "imagen":      i+1,
+                    "clase":       cls_name,
+                    "nombre_es":   label_es,
+                    "confianza":   round(conf_val, 4),
+                    "severidad":   severity,
+                    "bbox":        [round(v, 1) for v in bbox],
+                })
+
+                if cls_name not in seen_classes:
+                    seen_classes.add(cls_name)
+                    recom_lines.append(
+                        f"**{label_es}** ({severity})\n> {recom}\n"
+                    )
+                    
+        if not seen_classes:
+            recom_lines.append("✅ **Sin Enfermedades Detectadas**\nLa planta parece estar sana.\n")
+            
+        combined_recom.append("\n".join(recom_lines))
+        all_detections_raw.extend(detections_raw)
+        
+        # Guardar en historial
+        mongo_db.save_detection(
+            img_original_rgb=np.array(pil_image),
+            img_annotated_rgb=annotated_rgb,
+            detections_data=detections_raw
+        )
+        
+    return all_annotated_pil, "\n\n---\n\n".join(combined_summary), "\n\n---\n\n".join(combined_recom), json.dumps(all_detections_raw, indent=2, ensure_ascii=False)
 
 
 def predict_live(
@@ -156,15 +251,18 @@ def predict_live(
 
 def export_history_csv() -> str:
     """Exporta el historial de detecciones como CSV."""
-    if not HISTORY:
+    import io
+    import csv
+    history_data = mongo_db.get_recent_history(limit=1000)
+    if not history_data:
         return "No hay historial para exportar."
 
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Timestamp", "Num Detecciones", "Clases", "Nombre ES", "Confianza", "Severidad"])
 
-    for entry in HISTORY:
-        if entry["resultados"]:
+    for entry in history_data:
+        if entry.get("resultados"):
             for det in entry["resultados"]:
                 writer.writerow([
                     entry["timestamp"],
@@ -183,9 +281,10 @@ def export_history_csv() -> str:
 def get_history_table() -> list[list]:
     """Construye la tabla del historial para Gradio Dataframe."""
     rows = []
-    for entry in HISTORY[-20:]:   # Últimas 20 entradas
+    history_data = mongo_db.get_recent_history(limit=20)
+    for entry in history_data:
         clases_str = ", ".join(
-            CLASS_NAMES_ES.get(c, c) for c in entry["clases"]
+            CLASS_NAMES_ES.get(c, c) for c in entry.get("clases", [])
         ) or "✅ Sana"
         rows.append([
             entry["timestamp"],
@@ -193,6 +292,65 @@ def get_history_table() -> list[list]:
             clases_str,
         ])
     return rows
+
+
+def restore_session(evt: gr.SelectData, history_data_df):
+    """
+    Restaura una sesión haciendo clic en una fila de la tabla de historial.
+    Retorna los componentes actualizados de la pestaña Detección.
+    """
+    if evt.index[0] >= len(history_data_df):
+        return [gr.update()]*12
+
+    # history_data_df is a pandas DataFrame that Gradio sends automatically
+    timestamp = history_data_df.iloc[evt.index[0], 0]
+    doc = mongo_db.get_detection_by_timestamp(timestamp)
+    if not doc:
+        return [gr.update()]*12
+    
+    img_orig = mongo_db.decode_image_from_base64(doc.get("img_original", ""))
+    img_annotated = mongo_db.decode_image_from_base64(doc.get("img_annotated", ""))
+    
+    import json
+    
+    results_raw = doc.get("resultados", [])
+    
+    if img_annotated is None:
+        img_annotated = img_orig
+
+    # Reconstruir summary y recomendaciones
+    recom_lines = ["### 💡 Recomendaciones de Acción\n"]
+    seen_classes = set()
+    for det in results_raw:
+        seen_classes.add(det["clase"])
+        recom_lines.append(f"**{det['nombre_es']}** ({det['severidad']})\n> {RECOMMENDATIONS.get(det['clase'], '')}\n")
+    
+    if not seen_classes:
+        recom_lines = ["### ✅ Sin Enfermedades Detectadas\nLa planta parece estar sana."]
+    
+    recom_md = "\n".join(recom_lines)
+    
+    num_det = len(results_raw)
+    summary_md = f"### 📊 Resumen de Detección\n* **Objetos detectados:** {num_det}\n"
+    if num_det == 0:
+         summary_md += "* **Estado:** ✅ Planta sana\n"
+    
+    json_out = json.dumps(results_raw, indent=2, ensure_ascii=False)
+    
+    return [
+        img_orig,                 # input_image
+        img_annotated,            # output_image
+        summary_md,               # summary_md
+        recom_md,                 # recom_md
+        json_out,                 # json_out
+        gr.update(visible=False), # group_vivo
+        gr.update(visible=True),  # group_foto
+        gr.update(visible=False), # group_multi
+        gr.update(visible=False), # group_history
+        gr.update(visible=False), # group_classes
+        gr.update(visible=False), # group_help
+        gr.update(value="Detección por Foto"), # mode_selector
+    ]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -362,6 +520,54 @@ input[type=range]::-webkit-slider-runnable-track {
     font-family: 'Outfit', sans-serif !important;
     font-weight: 600 !important;
 }
+
+/* ── Sobrescribir fondos por defecto de Gradio ───────── */
+:root, .dark, body.dark, .gradio-container {
+    --background-fill-secondary: #1f222b !important;
+    --block-background-fill: #1f222b !important;
+    --panel-background-fill: #1f222b !important;
+    --input-background-fill: #1f222b !important;
+}
+
+/* ── Custom Nav ──────────────────────────────────────── */
+#custom-nav {
+    margin-bottom: 20px !important;
+    align-items: center;
+    border-bottom: 1px solid rgba(255,255,255,0.05) !important;
+    padding-bottom: 5px !important;
+}
+#nav-links {
+    justify-content: flex-end;
+    align-items: center;
+    gap: 5px;
+}
+.nav-btn {
+    color: var(--text-muted) !important;
+    border: none !important;
+    font-family: 'Outfit', sans-serif !important;
+    font-size: 1.05rem !important;
+    font-weight: 500 !important;
+    padding: 12px 20px !important;
+    border-radius: 8px 8px 0 0 !important;
+    background: transparent !important;
+    cursor: pointer !important;
+    transition: all 0.2s ease !important;
+    box-shadow: none !important;
+}
+.nav-btn:hover {
+    color: #fff !important;
+    background: rgba(255,255,255,0.03) !important;
+}
+.dropdown-elegant {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2) !important;
+}
+.dropdown-elegant > div, .dropdown-elegant .wrap, .dropdown-elegant .container {
+    background: transparent !important;
+    border: none !important;
+}
 """
 
 # ─────────────────────────────────────────────────────────────
@@ -392,127 +598,230 @@ def build_ui(model_path: str) -> gr.Blocks:
             elem_id="header-section",
         )
 
-        # ── Tabs principales ────────────────────────────────────
-        with gr.Tabs():
+        # ── Contenedor Principal ────────────────────────────────
+        with gr.Column():
 
             # ════════════════════════════════════════════════════
+            # NAVEGACIÓN SUPERIOR
             # ════════════════════════════════════════════════════
-            # TAB 1: EN VIVO
+            with gr.Row(elem_id="custom-nav"):
+                with gr.Column(scale=3, min_width=250):
+                    mode_selector = gr.Dropdown(
+                        choices=["Detección por Foto", "Detección en Vivo", "Detección Multi-Imagen"],
+                        value="Detección por Foto",
+                        show_label=False,
+                        interactive=True,
+                        filterable=False,
+                        elem_classes=["dropdown-elegant"],
+                    )
+                with gr.Column(scale=7):
+                    with gr.Row(elem_id="nav-links"):
+                        btn_historial = gr.Button("📜 Historial", elem_classes=["nav-btn"])
+                        btn_clases = gr.Button("📚 Clases del Modelo", elem_classes=["nav-btn"])
+                        btn_ayuda = gr.Button("❓ Ayuda", elem_classes=["nav-btn"])
+            
             # ════════════════════════════════════════════════════
-            with gr.Tab("🎥 Detección en Vivo", id="tab-live"):
-                with gr.Row(equal_height=False):
-                    with gr.Column(scale=5):
-                        gr.Markdown("#### 📷 Cámara")
-                        live_image = gr.Image(
-                            type="numpy",
-                            label="Transmisión",
-                            sources=["webcam"],
-                            streaming=True,
-                            elem_classes=["panel-card"],
-                        )
-                        with gr.Group(elem_classes=["panel-card"]):
-                            with gr.Row():
-                                live_conf = gr.Slider(minimum=0.1, maximum=0.95, value=0.20, step=0.05, label="🎯 Confianza mínima")
-                                live_iou = gr.Slider(minimum=0.1, maximum=0.95, value=0.45, step=0.05, label="📐 Umbral IoU")
-                    
-                    with gr.Column(scale=5):
-                        gr.Markdown("#### 🖼️ Detección en Tiempo Real")
-                        live_output = gr.Image(
-                            type="numpy",
-                            label="Salida",
-                            interactive=False,
-                            elem_classes=["panel-card"],
-                        )
+            # PANELES DE CONTENIDO
+            # ════════════════════════════════════════════════════
+            with gr.Column():
                 
-                # Evento de streaming
-                live_image.stream(
-                    fn=predict_live,
-                    inputs=[live_image, live_conf, live_iou],
-                    outputs=[live_output],
-                )
-
-            # ════════════════════════════════════════════════════
-            # TAB 2: DETECCIÓN POR FOTO
-            # ════════════════════════════════════════════════════
-            with gr.Tab("🔍 Detección por Foto", id="tab-detect"):
-                # ── Fila 1: Imágenes (Entrada y Salida) ─────────
-                with gr.Row(equal_height=False):
-                    with gr.Column(scale=5):
-                        gr.Markdown("#### 📷 Imagen de la hoja")
-                        input_image = gr.Image(
-                            type="pil",
-                            label="Cargar imagen",
-                            sources=["upload", "clipboard", "webcam"],
-                            height=360,
-                            elem_classes=["panel-card"],
-                        )
-                    with gr.Column(scale=5):
-                        gr.Markdown("#### 🖼️ Resultado de Detección")
-                        output_image = gr.Image(
-                            type="pil",
-                            label="Imagen anotada",
-                            height=360,
-                            interactive=False,
-                            elem_classes=["panel-card"],
-                        )
-
-                # ── Fila 2: Controles ────────────────────────────
-                with gr.Row():
-                    with gr.Column(scale=10):
-                        with gr.Group(elem_classes=["panel-card"]):
-                            with gr.Row():
-                                conf_slider = gr.Slider(
-                                    minimum=0.10, maximum=0.95, value=0.40, step=0.05,
-                                    label="🎯 Confianza mínima",
-                                    info="Mayor valor → menos detecciones pero más precisas",
-                                )
-                                iou_slider = gr.Slider(
-                                    minimum=0.10, maximum=0.95, value=0.45, step=0.05,
-                                    label="📐 Umbral IoU (NMS)",
-                                    info="Controla superposición de bounding boxes",
-                                )
-                            btn_detect = gr.Button(
-                                "🔬 Analizar Hoja",
-                                variant="primary",
-                                elem_id="btn-detect",
+                # ── Grupo 1: En Vivo ──
+                with gr.Group(visible=False) as group_vivo:
+                    with gr.Row(equal_height=False):
+                        with gr.Column(scale=5):
+                            gr.Markdown("#### 📷 Cámara")
+                            live_image = gr.Image(
+                                type="numpy",
+                                label="Transmisión",
+                                sources=["webcam"],
+                                streaming=True,
+                                elem_classes=["panel-card"],
                             )
-                            gr.Examples(
-                                examples=[],
-                                inputs=input_image,
-                                label="Ejemplos rápidos",
+                            with gr.Group(elem_classes=["panel-card"]):
+                                with gr.Row():
+                                    live_conf = gr.Slider(minimum=0.1, maximum=0.95, value=0.20, step=0.05, label="🎯 Confianza mínima")
+                                    live_iou = gr.Slider(minimum=0.1, maximum=0.95, value=0.45, step=0.05, label="📐 Umbral IoU")
+                        
+                        with gr.Column(scale=5):
+                            gr.Markdown("#### 🖼️ Detección en Tiempo Real")
+                            live_output = gr.Image(
+                                type="numpy",
+                                label="Salida",
+                                interactive=False,
+                                elem_classes=["panel-card"],
+                            )
+                    
+                    # Evento de streaming
+                    live_image.stream(
+                        fn=predict_live,
+                        inputs=[live_image, live_conf, live_iou],
+                        outputs=[live_output],
+                    )
+
+                # ── Grupo 2: Por Foto ──
+                with gr.Group(visible=True) as group_foto:
+                    # ── Fila 1: Imágenes (Entrada y Salida) ─────────
+                    with gr.Row(equal_height=False):
+                        with gr.Column(scale=5):
+                            gr.Markdown("#### 📷 Imagen de la hoja")
+                            input_image = gr.Image(
+                                type="pil",
+                                label="Cargar imagen",
+                                sources=["upload", "clipboard", "webcam"],
+                                height=360,
+                                elem_classes=["panel-card"],
+                            )
+                        with gr.Column(scale=5):
+                            gr.Markdown("#### 🖼️ Resultado de Detección")
+                            output_image = gr.Image(
+                                type="pil",
+                                label="Imagen anotada",
+                                height=360,
+                                interactive=False,
+                                elem_classes=["panel-card"],
                             )
 
-                # ── Fila 3: Resultados (Resumen + Recomendaciones) ────────
-                with gr.Row():
-                    with gr.Column(scale=5):
-                        summary_md = gr.Markdown(
-                            "**Resultado:** Esperando imagen...",
-                            label="Resumen",
-                            elem_classes=["panel-card"],
-                        )
-                    with gr.Column(scale=5):
-                        recom_md = gr.Markdown(
-                            "**Recomendaciones:** —",
-                            label="Acciones recomendadas",
-                            elem_classes=["panel-card"],
-                        )
+                    # ── Fila 2: Controles ────────────────────────────
+                    with gr.Row():
+                        with gr.Column(scale=10):
+                            with gr.Group(elem_classes=["panel-card"]):
+                                with gr.Row():
+                                    conf_slider = gr.Slider(
+                                        minimum=0.10, maximum=0.95, value=0.40, step=0.05,
+                                        label="🎯 Confianza mínima",
+                                        info="Mayor valor → menos detecciones pero más precisas",
+                                    )
+                                    iou_slider = gr.Slider(
+                                        minimum=0.10, maximum=0.95, value=0.45, step=0.05,
+                                        label="📐 Umbral IoU (NMS)",
+                                        info="Controla superposición de bounding boxes",
+                                    )
+                                btn_detect = gr.Button(
+                                    "🔬 Analizar Hoja",
+                                    variant="primary",
+                                    elem_id="btn-detect",
+                                )
+                                gr.Examples(
+                                    examples=[],
+                                    inputs=input_image,
+                                    label="Ejemplos rápidos",
+                                )
 
-                # ── JSON raw ──────────────────────────────────────
-                with gr.Accordion("📋 Datos raw (JSON)", open=False):
-                    json_out = gr.Code(language="json", label="Detecciones JSON")
+                    # ── Fila 3: Resultados (Resumen + Recomendaciones) ────────
+                    with gr.Row():
+                        with gr.Column(scale=5):
+                            summary_md = gr.Markdown(
+                                "**Resultado:** Esperando imagen...",
+                                label="Resumen",
+                                elem_classes=["panel-card"],
+                            )
+                        with gr.Column(scale=5):
+                            recom_md = gr.Markdown(
+                                "**Recomendaciones:** —",
+                                label="Acciones recomendadas",
+                                elem_classes=["panel-card"],
+                            )
 
-                # ── Evento principal ──────────────────────────────
-                btn_detect.click(
-                    fn=predict_from_pil,
-                    inputs=[input_image, conf_slider, iou_slider],
-                    outputs=[output_image, summary_md, recom_md, json_out],
-                    show_progress="full",
-                )
+                    # ── JSON raw ──────────────────────────────────────
+                    with gr.Accordion("📋 Datos raw (JSON)", open=False):
+                        json_out = gr.Code(language="json", label="Detecciones JSON")
+
+                    # ── Evento principal ──────────────────────────────
+                    btn_detect.click(
+                        fn=predict_from_pil,
+                        inputs=[input_image, conf_slider, iou_slider],
+                        outputs=[output_image, summary_md, recom_md, json_out],
+                        show_progress="full",
+                    )
+
+                # ── Grupo 3: Multi-Imagen ──
+                with gr.Group(visible=False) as group_multi:
+                    with gr.Row(equal_height=False):
+                        with gr.Column(scale=5):
+                            gr.Markdown("#### 📷 Subir Múltiples Imágenes (Máximo 4)")
+                            input_files = gr.File(
+                                file_count="multiple",
+                                file_types=["image"],
+                                label="Seleccionar imágenes",
+                                elem_classes=["panel-card"],
+                            )
+                        with gr.Column(scale=5):
+                            gr.Markdown("#### 🖼️ Resultados en Galería")
+                            output_gallery = gr.Gallery(
+                                label="Imágenes anotadas",
+                                columns=2,
+                                rows=2,
+                                object_fit="contain",
+                                interactive=False,
+                                elem_classes=["panel-card"],
+                            )
+
+                    with gr.Row():
+                        with gr.Column(scale=10):
+                            with gr.Group(elem_classes=["panel-card"]):
+                                with gr.Row():
+                                    multi_conf_slider = gr.Slider(
+                                        minimum=0.10, maximum=0.95, value=0.40, step=0.05,
+                                        label="🎯 Confianza mínima",
+                                        info="Mayor valor → menos detecciones pero más precisas",
+                                    )
+                                    multi_iou_slider = gr.Slider(
+                                        minimum=0.10, maximum=0.95, value=0.45, step=0.05,
+                                        label="📐 Umbral IoU (NMS)",
+                                        info="Controla superposición de bounding boxes",
+                                    )
+                                btn_multi_detect = gr.Button(
+                                    "🔬 Analizar Imágenes",
+                                    variant="primary",
+                                    elem_id="btn-detect",
+                                )
+
+                    with gr.Row():
+                        with gr.Column(scale=5):
+                            multi_summary_md = gr.Markdown(
+                                "**Resultado:** Esperando imágenes...",
+                                label="Resumen",
+                                elem_classes=["panel-card"],
+                            )
+                        with gr.Column(scale=5):
+                            multi_recom_md = gr.Markdown(
+                                "**Recomendaciones:** —",
+                                label="Acciones recomendadas",
+                                elem_classes=["panel-card"],
+                            )
+
+                    with gr.Accordion("📋 Datos raw (JSON)", open=False):
+                        multi_json_out = gr.Code(language="json", label="Detecciones JSON")
+
+                    def check_file_count(files):
+                        if files and len(files) >= 4:
+                            try:
+                                if len(files) > 4:
+                                    gr.Warning("Límite excedido. Se procesarán solo las primeras 4 imágenes.")
+                            except AttributeError:
+                                pass
+                            return gr.update(interactive=False)
+                        return gr.update(interactive=True)
+
+                    input_files.change(
+                        fn=check_file_count,
+                        inputs=[input_files],
+                        outputs=[input_files]
+                    )
+
+                    btn_multi_detect.click(
+                        fn=predict_multi_images,
+                        inputs=[input_files, multi_conf_slider, multi_iou_slider],
+                        outputs=[output_gallery, multi_summary_md, multi_recom_md, multi_json_out],
+                        show_progress="full",
+                    )
+                    
+                pass # Lógica de navegación al final
 
             # ════════════════════════════════════════════════════
             # TAB 2: HISTORIAL
             # ════════════════════════════════════════════════════
-            with gr.Tab("📜 Historial", id="tab-history"):
+            with gr.Group(visible=False) as group_history:
                 gr.Markdown("### 📊 Historial de detecciones en esta sesión")
 
                 with gr.Row():
@@ -546,7 +855,7 @@ def build_ui(model_path: str) -> gr.Blocks:
             # ════════════════════════════════════════════════════
             # TAB 3: CLASES
             # ════════════════════════════════════════════════════
-            with gr.Tab("📚 Clases del Modelo", id="tab-classes"):
+            with gr.Group(visible=False) as group_classes:
                 gr.Markdown("### 🌱 Enfermedades que puede detectar el modelo")
 
                 classes_info = ""
@@ -565,7 +874,7 @@ def build_ui(model_path: str) -> gr.Blocks:
             # ════════════════════════════════════════════════════
             # TAB 4: AYUDA
             # ════════════════════════════════════════════════════
-            with gr.Tab("❓ Ayuda", id="tab-help"):
+            with gr.Group(visible=False) as group_help:
                 gr.Markdown("""
 ### 🚀 Guía de Uso
 
@@ -618,6 +927,49 @@ python src/evaluate.py --split test
           &nbsp;|&nbsp; Proyecto académico — SEXTO SEMESTRE
         </div>
         """)
+
+        # ── Lógica de Navegación Custom ──
+        all_groups = [group_vivo, group_foto, group_multi, group_history, group_classes, group_help]
+        
+        def show_mode(choice):
+            if not choice:
+                return [gr.update() for _ in range(6)]
+            return (
+                gr.update(visible=(choice == "Detección en Vivo")),
+                gr.update(visible=(choice == "Detección por Foto")),
+                gr.update(visible=(choice == "Detección Multi-Imagen")),
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(visible=False),
+            )
+            
+        def show_nav(nav_id):
+            return (
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(visible=(nav_id == "historial")),
+                gr.update(visible=(nav_id == "clases")),
+                gr.update(visible=(nav_id == "ayuda")),
+            )
+            
+        mode_selector.change(fn=show_mode, inputs=[mode_selector], outputs=all_groups)
+        btn_historial.click(fn=lambda: show_nav("historial"), inputs=[], outputs=all_groups)
+        btn_clases.click(fn=lambda: show_nav("clases"), inputs=[], outputs=all_groups)
+        btn_ayuda.click(fn=lambda: show_nav("ayuda"), inputs=[], outputs=all_groups)
+
+        # Restaurar sesión desde el historial
+        history_table.select(
+            fn=restore_session,
+            inputs=[history_table],
+            outputs=[
+                input_image, 
+                output_image, 
+                summary_md, 
+                recom_md, 
+                json_out, 
+            ] + all_groups + [mode_selector]
+        )
 
     return demo
 
