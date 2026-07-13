@@ -1,5 +1,6 @@
 import os
-from google import genai
+import time
+from groq import Groq
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
@@ -8,22 +9,18 @@ from src.utils import CLASS_NAMES_ES
 load_dotenv()
 
 # Configurar API Key
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if GEMINI_API_KEY:
-    # No es necesario configurar de forma global con el nuevo SDK.
-    # El cliente se instanciará en la función.
-    pass
-else:
-    print("AVISO: GEMINI_API_KEY no configurada. El análisis con IA no funcionará.")
+if not GROQ_API_KEY:
+    print("AVISO: GROQ_API_KEY no configurada. El análisis con IA no funcionará.")
 
 def analyze_history(history_data: List[Dict[str, Any]], start_date: str = None, end_date: str = None) -> str:
     """
     Toma los datos del historial (y opcionalmente las fechas) para generar un 
     análisis agronómico utilizando Google Gemini.
     """
-    if not GEMINI_API_KEY:
-        return "⚠️ **Error:** No se ha configurado la clave de API de Gemini (`GEMINI_API_KEY`). Por favor, añádela a tu archivo `.env` en la raíz del proyecto."
+    if not GROQ_API_KEY:
+        return "⚠️ **Error:** No se ha configurado la clave de API de Groq (`GROQ_API_KEY`). Por favor, añádela a tu archivo `.env` en la raíz del proyecto."
     
     if not history_data:
         return "ℹ️ No hay datos suficientes en el rango de fechas seleccionado para realizar un análisis."
@@ -70,12 +67,35 @@ Eres un experto agrónomo virtual. Analiza el siguiente resumen de detecciones d
 Usa formato Markdown, sé profesional pero amigable, y conciso.
 """
 
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model='gemini-3.5-flash',
-            contents=prompt,
-        )
-        return response.text
-    except Exception as e:
-        return f"❌ **Error al generar el análisis:** {str(e)}"
+    max_retries = 3
+    fallback_models = ['llama-3.3-70b-versatile', 'llama3-70b-8192', 'llama3-8b-8192', 'mixtral-8x7b-32768']
+    
+    last_error = ""
+    for attempt in range(max_retries):
+        for model_name in fallback_models:
+            try:
+                client = Groq(api_key=GROQ_API_KEY)
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        }
+                    ],
+                    model=model_name,
+                )
+                return chat_completion.choices[0].message.content
+            except Exception as e:
+                err_str = str(e)
+                last_error = err_str
+                # Si es error 503 (Unavailable), 429 (Rate limit) pasamos al siguiente modelo
+                if "503" in err_str or "429" in err_str or "not found" in err_str.lower():
+                    continue
+                # Otro tipo de error (ej. clave inválida), retornamos de inmediato
+                return f"❌ **Error al generar el análisis:** {err_str}"
+                
+        # Si fallaron todos los modelos, aplicamos backoff antes del siguiente intento general
+        if attempt < max_retries - 1:
+            time.sleep(2 ** attempt)
+            
+    return f"❌ **Error al generar el análisis (Todos los modelos fallaron):** {last_error}"
