@@ -71,17 +71,27 @@ def save_detection(img_original_rgb, img_annotated_rgb, detections_data):
     except Exception as e:
         print(f"❌ Error al guardar en MongoDB: {e}")
 
-def get_recent_history(limit=20):
+def get_recent_history(limit=20, start_date=None, end_date=None):
     """
     Recupera los últimos registros del historial, sin cargar las imágenes para 
     no saturar la memoria (usado para la tabla).
+    Permite filtrar opcionalmente por un rango de fechas.
     """
     if history_collection is None:
         return []
     
     try:
+        query = {}
+        if start_date or end_date:
+            timestamp_query = {}
+            if start_date:
+                timestamp_query["$gte"] = f"{str(start_date)[:10]} 00:00:00"
+            if end_date:
+                timestamp_query["$lte"] = f"{str(end_date)[:10]} 23:59:59"
+            query["timestamp"] = timestamp_query
+
         # Exclude images to make the query fast
-        cursor = history_collection.find({}, {"img_original": 0, "img_annotated": 0}).sort("timestamp", -1).limit(limit)
+        cursor = history_collection.find(query, {"img_original": 0, "img_annotated": 0}).sort("timestamp", -1).limit(limit)
         return list(cursor)
     except Exception as e:
         print(f"❌ Error consultando MongoDB: {e}")

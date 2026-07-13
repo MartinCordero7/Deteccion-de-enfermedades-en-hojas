@@ -33,3 +33,6 @@ reportlab>=4.0.0
 # --- Base de Datos ---
 pymongo>=4.0.0
 python-dotenv>=1.0.0
+
+# --- Inteligencia Artificial ---
+google-genai>=0.2.0

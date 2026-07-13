@@ -26,6 +26,7 @@ from ultralytics import YOLO
 from src.utils import CLASS_NAMES_ES, SEVERITY_LEVEL, RECOMMENDATIONS
 from src.utils.visualizer import draw_detections, build_summary_text
 import src.db.mongo as mongo_db
+import src.ai_analyst as ai_analyst
 
 # ─────────────────────────────────────────────────────────────
 # Configuración
@@ -278,10 +279,10 @@ def export_history_csv() -> str:
     return output.getvalue()
 
 
-def get_history_table() -> list[list]:
+def get_history_table(start_date=None, end_date=None) -> list[list]:
     """Construye la tabla del historial para Gradio Dataframe."""
     rows = []
-    history_data = mongo_db.get_recent_history(limit=20)
+    history_data = mongo_db.get_recent_history(limit=50, start_date=start_date, end_date=end_date)
     for entry in history_data:
         clases_str = ", ".join(
             CLASS_NAMES_ES.get(c, c) for c in entry.get("clases", [])
@@ -825,8 +826,8 @@ def build_ui(model_path: str) -> gr.Blocks:
                 gr.Markdown("### 📊 Historial de detecciones en esta sesión")
 
                 with gr.Row():
-                    btn_refresh = gr.Button("🔄 Actualizar tabla", variant="secondary")
-                    btn_export  = gr.Button("💾 Exportar CSV",     variant="secondary")
+                    filter_start_date = gr.DateTime(label="Fecha inicio", include_time=False, type="string")
+                    filter_end_date = gr.DateTime(label="Fecha fin", include_time=False, type="string")
 
                 history_table = gr.Dataframe(
                     headers=["Timestamp", "Nº Detecciones", "Enfermedades detectadas"],
@@ -835,21 +836,44 @@ def build_ui(model_path: str) -> gr.Blocks:
                     interactive=False,
                     label="Historial",
                 )
+                
+                with gr.Row():
+                    btn_export  = gr.Button("💾 Exportar CSV", variant="secondary")
+                    btn_ai = gr.Button("🤖 Analizar tendencias con IA", variant="primary")
+                
+                ai_output = gr.Markdown("Presiona el botón para generar un análisis agronómico basado en los filtros seleccionados.")
+                
                 csv_output = gr.Textbox(
                     label="CSV generado (copiar o descargar)",
                     lines=10,
                     visible=False,
                 )
 
-                btn_refresh.click(
+                filter_start_date.change(
                     fn=get_history_table,
-                    inputs=[],
+                    inputs=[filter_start_date, filter_end_date],
                     outputs=[history_table],
                 )
+                filter_end_date.change(
+                    fn=get_history_table,
+                    inputs=[filter_start_date, filter_end_date],
+                    outputs=[history_table],
+                )
+
                 btn_export.click(
                     fn=lambda: (export_history_csv(), gr.update(visible=True)),
                     inputs=[],
                     outputs=[csv_output, csv_output],
+                )
+
+                def run_ai_analysis(start_d, end_d):
+                    history_data = mongo_db.get_recent_history(limit=500, start_date=start_d, end_date=end_d)
+                    return ai_analyst.analyze_history(history_data, start_d, end_d)
+
+                btn_ai.click(
+                    fn=run_ai_analysis,
+                    inputs=[filter_start_date, filter_end_date],
+                    outputs=[ai_output],
                 )
 
             # ════════════════════════════════════════════════════
@@ -954,7 +978,16 @@ python src/evaluate.py --split test
             )
             
         mode_selector.change(fn=show_mode, inputs=[mode_selector], outputs=all_groups)
-        btn_historial.click(fn=lambda: show_nav("historial"), inputs=[], outputs=all_groups)
+        def nav_to_history(start_d, end_d):
+            groups = show_nav("historial")
+            table_data = get_history_table(start_d, end_d)
+            return (*groups, table_data)
+
+        btn_historial.click(
+            fn=nav_to_history,
+            inputs=[filter_start_date, filter_end_date],
+            outputs=all_groups + [history_table]
+        )
         btn_clases.click(fn=lambda: show_nav("clases"), inputs=[], outputs=all_groups)
         btn_ayuda.click(fn=lambda: show_nav("ayuda"), inputs=[], outputs=all_groups)
 
