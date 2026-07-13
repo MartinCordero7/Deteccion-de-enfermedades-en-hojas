@@ -27,6 +27,8 @@ from src.utils import CLASS_NAMES_ES, SEVERITY_LEVEL, RECOMMENDATIONS
 from src.utils.visualizer import draw_detections, build_summary_text
 import src.db.mongo as mongo_db
 import src.ai_analyst as ai_analyst
+from src.utils.pdf_generator import generate_report
+from src.utils.stats import get_stats_plots
 
 # ─────────────────────────────────────────────────────────────
 # Configuración
@@ -281,6 +283,9 @@ def export_history_csv() -> str:
 
 def get_history_table(start_date=None, end_date=None) -> list[list]:
     """Construye la tabla del historial para Gradio Dataframe."""
+    if not start_date or not end_date:
+        return []
+        
     rows = []
     history_data = mongo_db.get_recent_history(limit=50, start_date=start_date, end_date=end_date)
     for entry in history_data:
@@ -348,6 +353,7 @@ def restore_session(evt: gr.SelectData, history_data_df):
         gr.update(visible=True),  # group_foto
         gr.update(visible=False), # group_multi
         gr.update(visible=False), # group_history
+        gr.update(visible=False), # group_stats
         gr.update(visible=False), # group_classes
         gr.update(visible=False), # group_help
         gr.update(value="Detección por Foto"), # mode_selector
@@ -618,6 +624,7 @@ def build_ui(model_path: str) -> gr.Blocks:
                 with gr.Column(scale=7):
                     with gr.Row(elem_id="nav-links"):
                         btn_historial = gr.Button("📜 Historial", elem_classes=["nav-btn"])
+                        btn_estadisticas = gr.Button("📈 Estadísticas", elem_classes=["nav-btn"])
                         btn_clases = gr.Button("📚 Clases del Modelo", elem_classes=["nav-btn"])
                         btn_ayuda = gr.Button("❓ Ayuda", elem_classes=["nav-btn"])
             
@@ -722,6 +729,10 @@ def build_ui(model_path: str) -> gr.Blocks:
                                 label="Acciones recomendadas",
                                 elem_classes=["panel-card"],
                             )
+                            
+                    with gr.Row():
+                        btn_pdf = gr.Button("📥 Generar Reporte PDF", visible=False, variant="secondary")
+                        file_pdf = gr.File(label="Reporte Descargable", visible=False)
 
                     # ── JSON raw ──────────────────────────────────────
                     with gr.Accordion("📋 Datos raw (JSON)", open=False):
@@ -733,6 +744,19 @@ def build_ui(model_path: str) -> gr.Blocks:
                         inputs=[input_image, conf_slider, iou_slider],
                         outputs=[output_image, summary_md, recom_md, json_out],
                         show_progress="full",
+                    ).then(
+                        fn=lambda: gr.update(visible=True),
+                        outputs=[btn_pdf]
+                    )
+                    
+                    def make_pdf(img, summary, recom):
+                        pdf_path = generate_report(img, summary, recom)
+                        return gr.update(value=pdf_path, visible=True)
+                        
+                    btn_pdf.click(
+                        fn=make_pdf,
+                        inputs=[output_image, summary_md, recom_md],
+                        outputs=[file_pdf]
                     )
 
                 # ── Grupo 3: Multi-Imagen ──
@@ -843,6 +867,10 @@ def build_ui(model_path: str) -> gr.Blocks:
                 
                 ai_output = gr.Markdown("Presiona el botón para generar un análisis agronómico basado en los filtros seleccionados.")
                 
+                with gr.Row():
+                    btn_pdf_history = gr.Button("📥 Generar Reporte PDF", visible=False, variant="secondary")
+                    file_pdf_history = gr.File(label="Reporte Descargable", visible=False)
+                
                 csv_output = gr.Textbox(
                     label="CSV generado (copiar o descargar)",
                     lines=10,
@@ -867,14 +895,39 @@ def build_ui(model_path: str) -> gr.Blocks:
                 )
 
                 def run_ai_analysis(start_d, end_d):
+                    if not start_d or not end_d:
+                        return "⚠️ Por favor, selecciona una Fecha de inicio y una Fecha de fin válidas para generar el análisis.", gr.update(visible=False)
                     history_data = mongo_db.get_recent_history(limit=500, start_date=start_d, end_date=end_d)
-                    return ai_analyst.analyze_history(history_data, start_d, end_d)
+                    ai_result = ai_analyst.analyze_history(history_data, start_d, end_d)
+                    return ai_result, gr.update(visible=True)
 
                 btn_ai.click(
                     fn=run_ai_analysis,
                     inputs=[filter_start_date, filter_end_date],
-                    outputs=[ai_output],
+                    outputs=[ai_output, btn_pdf_history],
                 )
+                
+                def make_pdf_history(ai_text, start_d, end_d):
+                    summary_text = "### Análisis de Tendencias Históricas\n"
+                    if start_d and end_d:
+                         summary_text += f"**Período:** {start_d} al {end_d}\n"
+                    pdf_path = generate_report(None, summary_text, ai_text)
+                    return gr.update(value=pdf_path, visible=True)
+                    
+                btn_pdf_history.click(
+                    fn=make_pdf_history,
+                    inputs=[ai_output, filter_start_date, filter_end_date],
+                    outputs=[file_pdf_history]
+                )
+
+            # ════════════════════════════════════════════════════
+            # TAB: ESTADISTICAS
+            # ════════════════════════════════════════════════════
+            with gr.Group(visible=False) as group_stats:
+                gr.Markdown("### 📈 Dashboard Estadístico (Últimos 30 días)")
+                with gr.Row():
+                    plot_pie = gr.Plot(label="Distribución de Enfermedades")
+                    plot_line = gr.Plot(label="Evolución en el Tiempo")
 
             # ════════════════════════════════════════════════════
             # TAB 3: CLASES
@@ -953,15 +1006,16 @@ python src/evaluate.py --split test
         """)
 
         # ── Lógica de Navegación Custom ──
-        all_groups = [group_vivo, group_foto, group_multi, group_history, group_classes, group_help]
+        all_groups = [group_vivo, group_foto, group_multi, group_history, group_stats, group_classes, group_help]
         
         def show_mode(choice):
             if not choice:
-                return [gr.update() for _ in range(6)]
+                return [gr.update() for _ in range(7)]
             return (
                 gr.update(visible=(choice == "Detección en Vivo")),
                 gr.update(visible=(choice == "Detección por Foto")),
                 gr.update(visible=(choice == "Detección Multi-Imagen")),
+                gr.update(visible=False),
                 gr.update(visible=False),
                 gr.update(visible=False),
                 gr.update(visible=False),
@@ -973,11 +1027,13 @@ python src/evaluate.py --split test
                 gr.update(visible=False),
                 gr.update(visible=False),
                 gr.update(visible=(nav_id == "historial")),
+                gr.update(visible=(nav_id == "estadisticas")),
                 gr.update(visible=(nav_id == "clases")),
                 gr.update(visible=(nav_id == "ayuda")),
             )
             
         mode_selector.change(fn=show_mode, inputs=[mode_selector], outputs=all_groups)
+        
         def nav_to_history(start_d, end_d):
             groups = show_nav("historial")
             table_data = get_history_table(start_d, end_d)
@@ -988,6 +1044,18 @@ python src/evaluate.py --split test
             inputs=[filter_start_date, filter_end_date],
             outputs=all_groups + [history_table]
         )
+        
+        def nav_to_stats():
+            groups = show_nav("estadisticas")
+            fig_pie, fig_line = get_stats_plots()
+            return (*groups, fig_pie, fig_line)
+
+        btn_estadisticas.click(
+            fn=nav_to_stats,
+            inputs=[],
+            outputs=all_groups + [plot_pie, plot_line]
+        )
+        
         btn_clases.click(fn=lambda: show_nav("clases"), inputs=[], outputs=all_groups)
         btn_ayuda.click(fn=lambda: show_nav("ayuda"), inputs=[], outputs=all_groups)
 

@@ -17,7 +17,7 @@ if not GROQ_API_KEY:
 def analyze_history(history_data: List[Dict[str, Any]], start_date: str = None, end_date: str = None) -> str:
     """
     Toma los datos del historial (y opcionalmente las fechas) para generar un 
-    análisis agronómico utilizando Google Gemini.
+    análisis agronómico utilizando modelos de IA vía Groq.
     """
     if not GROQ_API_KEY:
         return "⚠️ **Error:** No se ha configurado la clave de API de Groq (`GROQ_API_KEY`). Por favor, añádela a tu archivo `.env` en la raíz del proyecto."
@@ -64,7 +64,7 @@ Eres un experto agrónomo virtual. Analiza el siguiente resumen de detecciones d
 2. Basado en las enfermedades más frecuentes, sugiere posibles causas ambientales o de cuidado que podrían estar provocándolas.
 3. Brinda 3 recomendaciones prácticas generales para el agricultor o cuidador de las plantas para mitigar estos problemas o mantener las plantas sanas.
 
-Usa formato Markdown, sé profesional pero amigable, y conciso.
+Usa formato Markdown, sé profesional pero amigable, conciso y resumido.
 """
 
     max_retries = 3
